@@ -25,10 +25,29 @@ except Exception as exc:
 
 logging.basicConfig(level=logging.DEBUG if settings.DEBUG else logging.INFO, format=LOGFORMAT)
 
+
+class SuppressHealthCheckAccessLog(logging.Filter):
+    """Drop successful health-check hits from the access log.
+
+    uvicorn.access logs with args (client_addr, method, full_path, http_version,
+    status_code), so this matches on those rather than the formatted string.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:
+            return True
+        _, method, path, _, status_code = args
+        return not (method == "GET" and path == "/" and isinstance(status_code, int) and status_code < 400)
+
+
 # These are chatty at DEBUG and rarely tell us anything we want.
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+if not settings.DEBUG:
+    logging.getLogger("uvicorn.access").addFilter(SuppressHealthCheckAccessLog())
 
 logging.info("Starting wsj27-auth-api on port %d", settings.PORT)
 
