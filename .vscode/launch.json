@@ -1,0 +1,34 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Reads src/.env for configuration — copy .env.example there first.
+            "name": "wsj27-auth-api",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "start.py",
+            // start.py resolves .env relative to the working directory.
+            "cwd": "${workspaceFolder}/src",
+            "env": {
+                "PYTHONDEVMODE": "1",
+                "DEBUG": "false"
+            },
+            // Frozen stdlib modules can make the debugger miss breakpoints.
+            "python args": ["-Xfrozen_modules=off"],
+            "justMyCode": true
+        },
+        {
+            // Same, with verbose logging of the token and role machinery.
+            "name": "wsj27-auth-api (debug logging)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "start.py",
+            "cwd": "${workspaceFolder}/src",
+            "env": {
+                "PYTHONDEVMODE": "1",
+                "DEBUG": "true"
+            },
+            "justMyCode": false
+        }
+    ]
+}

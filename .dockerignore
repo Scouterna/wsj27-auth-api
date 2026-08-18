@@ -1,0 +1,21 @@
+# Secrets — must never enter the image.
+# Patterns are anchored at the build context root, so the leading **/ is what
+# actually excludes src/.env; a bare ".env" would only match one at the root.
+**/.env
+**/.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/dev-roles.json
+
+# Local tooling and build artefacts
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.git/
+.gitignore
+.vscode/
+k8s/
+README.md

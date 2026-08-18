@@ -1,0 +1,22 @@
+# Local development environment. Not used in production
+#
+# Usage:
+#   Copy .env.example to src/.env and fill in OIDC_CLIENT_SECRET and
+#   SIGNING_KEY, then:
+#   docker compose up --build
+#
+# The api service loads src/.env (the same file used to run the app
+# directly), so settings stay in one place. PORT is overridden below
+# because the host-side port mapping can't follow whatever value src/.env
+# happens to set.
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: src/.env
+        required: false
+    environment:
+      PORT: 8000

@@ -1,0 +1,34 @@
+# Secrets / local config — never commit
+.env
+.env.*
+!.env.example
+
+# Signing keys — never commit
+*.pem
+*.key
+
+# Rendered k8s secrets. The committed template is secret.example.yaml; anything
+# else matching this name holds real values.
+k8s/secret.yaml
+k8s/secret-*.yaml
+
+# Local role stub data
+dev-roles.json
+
+# Deployment manifests — kept outside the public repo.
+/k8s/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Editor / OS
+# .vscode is committed: the launch config and shared editor settings are part
+# of the project. Personal overrides belong in .vscode/settings.local.json.
+.vscode/*.local.json
+.DS_Store

@@ -1,0 +1,23 @@
+[project]
+name = "wsj27-auth-api"
+version = "0.3.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]",
+    "httpx[http2]",
+    "joserfc",
+    "cryptography",
+    "pydantic-settings",
+]
+
+[dependency-groups]
+# debugpy is what the VSCode launch configs attach to; without it F5 fails
+# silently, before the app produces any output.
+dev = ["pytest>=8,<10", "debugpy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
