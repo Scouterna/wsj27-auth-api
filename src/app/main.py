@@ -6,12 +6,26 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from . import oidc, roles
 from .config import get_settings
 from .keys import init_keys
 from .routes import router
 from .service_clients import init_service_clients
+
+# --- Create instrumentor, settings and logger objects ---
+instrumentator = Instrumentator(
+    excluded_handlers=["/metrics"],
+    should_instrument_requests_inprogress=True,
+    inprogress_name="http_requests_inprogress",
+    inprogress_labels=True,
+)
+instrumentator.add(
+    metrics.default(
+        latency_lowr_buckets=(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0, float("inf")),
+    )
+)
 
 logger = logging.getLogger(__name__)
 

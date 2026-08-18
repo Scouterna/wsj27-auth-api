@@ -8,6 +8,7 @@ dependencies = [
     "joserfc",
     "cryptography",
     "pydantic-settings",
+    "prometheus-fastapi-instrumentator",
 ]
 
 [dependency-groups]
