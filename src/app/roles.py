@@ -1,14 +1,22 @@
-"""Role assignment, derived from WSJ27 project membership.
+"""Role lookup for the token we mint.
 
-The identity provider we authenticate against carries no WSJ27 roles, so we
-compute them here and attach them to the token we mint.
+The identity provider we authenticate against carries no project roles, so we
+attach them ourselves. We do not *decide* them: the project API is the authority
+on what roles exist and who holds them, and serves a finished `member_no -> roles`
+map. This module caches that map and answers lookups during login.
 
-Project membership comes from wsj27-project-api, fetched in bulk on a timer and
-held in memory. Lookups during login are therefore synchronous and never block
-on that service — a login still succeeds if the cache is cold or project-api is
-down, the user simply gets no roles until it recovers.
+Keeping the interpretation upstream is deliberate. It leaves nothing
+project-specific in this service — no member types, no role names, no namespace —
+so pointing `PROJECT_API_URL` at a different project's API is the only change
+needed to reuse it. It also puts the definition of a role next to the code that
+enforces it, instead of splitting producer and consumer across two repositories.
 
-Only registered project members get roles at all. Everyone else authenticates
+The map is fetched in bulk on a timer and held in memory, so lookups during login
+are synchronous and never block on that service — a login still succeeds if the
+cache is cold or the project API is down, the user simply gets no roles until it
+recovers.
+
+Only members the upstream lists get roles at all. Everyone else authenticates
 successfully and can do nothing, which is the intended behaviour rather than an
 error.
 """
@@ -37,89 +45,28 @@ _task: asyncio.Task | None = None
 # get a 304 with no body when it has not.
 _etag: str | None = None
 
-# --- Role model ---------------------------------------------------------------
-#
-# Roles have two or three colon-separated parts, e.g. "wsj27:cmt:admin". A
-# consumer can grant on the whole namespace ("wsj27:*") or require one exact
-# role. The first part is always the wsj27 namespace.
-ROLE_NAMESPACE = "wsj27"
-ROLE_LEADER = "ledare"
-ROLE_CMT = "cmt"
-ROLE_ACCESS = "access"
-
-
 # How long to wait before retrying while the cache has never loaded. Short,
 # because the usual cause is project-api still starting up alongside us.
 STARTUP_RETRY_SECONDS = 30
 
 
 class RoleFetchError(Exception):
-    """Could not get participant data from project-api.
+    """Could not get the role map from the project API.
 
     Its own message says what went wrong, so callers log it without a traceback:
-    project-api being down or misconfigured is an operational condition, not a
+    that service being down or misconfigured is an operational condition, not a
     fault in this service.
     """
 
 
-# Only these member types get roles at all.
-MEMBER_TYPE_LEADER = "Avdelningsledare"
-MEMBER_TYPE_CMT = "Kontingentledning"
-
-# access_level values that mean "no access role", alongside a blank value.
-NO_ACCESS_LEVELS = {"ingen", ""}
-
-
-def roles_for_participant(info: dict[str, Any]) -> list[str]:
-    """Map one participant's project fields to WSJ27 roles.
-
-    The rules, as of 2026-08-16:
-
-      * Only `Avdelningsledare` and `Kontingentledning` get roles at all.
-        Everyone else is a registered participant with no permissions.
-      * `Avdelningsledare` gets `wsj27:ledare:<troop>` — the troop is part of
-        the role because a leader's authority is scoped to their own troop.
-      * `Kontingentledning` gets `wsj27:cmt`.
-      * `access_level` becomes `wsj27:access:<level>` unless it is "Ingen" or
-        blank, so the absence of access is expressed by the absence of a role
-        rather than by a role meaning "nothing".
-
-    Kept as a pure function of one participant record: it is the piece most
-    likely to change, and this way it can be reasoned about and tested without
-    the cache or the network.
-    """
-    member_type = str(info.get("member_type") or "").strip()
-    roles: list[str] = []
-
-    if member_type == MEMBER_TYPE_LEADER:
-        troop = str(info.get("troop") or "").strip()
-        if troop:
-            roles.append(f"{ROLE_NAMESPACE}:{ROLE_LEADER}:{troop}")
-        else:
-            # A leader with no troop cannot be granted troop-scoped authority;
-            # say so, because it is a data problem rather than a normal state.
-            logger.warning("Participant is %s but has no troop; granting no leader role", MEMBER_TYPE_LEADER)
-    elif member_type == MEMBER_TYPE_CMT:
-        roles.append(f"{ROLE_NAMESPACE}:{ROLE_CMT}")
-    else:
-        # Not a role-bearing member type: no roles, and no access role either.
-        return []
-
-    access_level = str(info.get("access_level") or "").strip()
-    if access_level.lower() not in NO_ACCESS_LEVELS:
-        roles.append(f"{ROLE_NAMESPACE}:{ROLE_ACCESS}:{access_level}")
-
-    return roles
-
-
-async def _fetch_participant_roles() -> dict[str, list[str]] | None:
-    """Fetch project members from wsj27-project-api and map them to roles.
+async def _fetch_member_roles() -> dict[str, list[str]] | None:
+    """Fetch the member-to-roles map from the project API at `PROJECT_API_URL`.
 
     Returns None when the data is unchanged (HTTP 304), so the caller can keep
     the cache it already has instead of rebuilding an identical one.
 
     `STUB_ROLES_FILE` short-circuits this for local development, so role-gated
-    behaviour can be exercised without project-api running.
+    behaviour can be exercised without the project API running.
     """
     stub = _load_stub_roles()
     if stub is not None:
@@ -166,17 +113,34 @@ async def _fetch_participant_roles() -> dict[str, list[str]] | None:
         raise RoleFetchError(f"project-api returned a non-JSON body for {url}") from exc
 
     if not isinstance(participants, dict):
-        raise RoleFetchError(f"project-api returned {type(participants).__name__} participants, expected an object")
+        raise RoleFetchError(f"{url} returned {type(participants).__name__} participants, expected an object")
 
+    # The upstream defines what a role is; we only carry it. Anything that is not
+    # a list of strings is a contract violation, so drop it and say so rather
+    # than minting tokens with malformed roles in them.
+    #
+    # An empty list is dropped too, and that is a decision rather than tidying:
+    # get_roles() distinguishes "absent" (fall back to DEFAULT_ROLES) from
+    # "present and empty" (exactly no roles). Upstreams are not expected to know
+    # that, and the two ways of saying "this member has no roles of their own"
+    # must not mean different things here. Absent is the one we keep, because it
+    # is what an upstream that omits unroled members already sends.
     roles: dict[str, list[str]] = {}
-    for member_no, info in participants.items():
-        if not isinstance(info, dict):
-            continue
-        member_roles = roles_for_participant(info)
-        if member_roles:
-            roles[str(member_no)] = member_roles
+    malformed = 0
+    for member_no, member_roles in participants.items():
+        if isinstance(member_roles, list) and all(isinstance(role, str) for role in member_roles):
+            if member_roles:
+                roles[str(member_no)] = member_roles
+        else:
+            malformed += 1
 
-    logger.info("Fetched %d participants, %d with roles", len(participants), len(roles))
+    if malformed:
+        # Counted, not named: this runs over every participant, so one bad
+        # upstream deploy would otherwise put thousands of member numbers in the
+        # log. The count is enough to notice; project-api's own logs say who.
+        logger.warning("Ignored %d member(s) whose roles were not a list of strings", malformed)
+
+    logger.info("Fetched roles for %d members", len(roles))
     return roles
 
 
@@ -244,7 +208,7 @@ async def refresh_cache() -> None:
     global _cache, _last_refresh
 
     started = time.perf_counter()
-    roles = await _fetch_participant_roles()
+    roles = await _fetch_member_roles()
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     if roles is None:

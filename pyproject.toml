@@ -14,11 +14,19 @@ dependencies = [
 [dependency-groups]
 # debugpy is what the VSCode launch configs attach to; without it F5 fails
 # silently, before the app produces any output.
-dev = ["pytest>=8,<10", "debugpy"]
+dev = [
+    "pytest>=8,<10",
+    "debugpy",
+    "pytest-asyncio>=0.24",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+# Silences a pytest-asyncio deprecation warning; the default becomes
+# function-scoped in a later release and this pins today's behaviour.
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 120

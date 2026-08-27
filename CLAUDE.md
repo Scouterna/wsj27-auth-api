@@ -15,7 +15,7 @@ members, and deliberately carries nothing project-specific — so it cannot hold
 WSJ27's roles, and WSJ27 cannot add them there. Instead this service:
 
 1. authenticates the user against Keycloak as usual,
-2. computes their roles from Scoutnet project data,
+2. looks up their roles, which the project API derives from Scoutnet data,
 3. mints a **new** token with Keycloak's identity claims plus those roles,
 4. signs it with **its own** key, and
 5. publishes **its own** JWKS and discovery document.
@@ -40,6 +40,15 @@ type or a second issuer.
 and `resource_access.<client>.roles` (read as `client:role`) — even though we
 mint the token ourselves. That's what lets any standard Keycloak-token consumer
 read it unchanged. A bespoke `roles` claim would break every consumer.
+
+**Nothing project-specific lives in this service.** We carry roles, we do not
+define them: the project API serves a finished `member_no -> roles` map and this
+service caches it. No member type, role name, or namespace string belongs in
+this codebase — reusing it for another project must be a matter of pointing
+`PROJECT_API_URL` elsewhere, not of editing code. Role *definitions* also belong
+next to the API that enforces them; they lived here once, while project-api
+matched them with hardcoded literals, and a namespace change here would silently
+have changed who could read health data there.
 
 **The signing key comes from configuration, never generated at startup.**
 Restarts must not invalidate live cookies, and every replica must sign
