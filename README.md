@@ -17,7 +17,7 @@ available to WSJ27 **does not carry the roles this project needs**, so instead
 this service:
 
 1. authenticates the user against Keycloak as usual,
-2. computes their roles from Scoutnet project data,
+2. looks up their roles, which the project API derives from Scoutnet data,
 3. mints a **new** token containing Keycloak's identity claims plus those roles,
 4. signs it with **its own key**, and
 5. publishes **its own** JWKS and discovery document.
@@ -120,17 +120,26 @@ Service tokens carry `preferred_username` = `service-account-<client-id>` and no
 
 ## Roles
 
-Roles come from a Scoutnet project, cached in memory and refreshed every
-`ROLE_SYNC_INTERVAL_MINUTES`. Lookups never block on Scoutnet: if the cache is
-cold or Scoutnet is down, users get `DEFAULT_ROLES` and login still works.
+**This service does not decide who holds which role.** The project API is the
+authority: it derives roles from Scoutnet project data and serves a finished
+`member_no -> roles` map at `PROJECT_API_URL`. We fetch that map on a timer,
+cache it, and look users up in it.
 
-> **The Scoutnet fetch is currently a stub.** `roles._fetch_from_scoutnet()` is
-> the only function that needs replacing; the cache, the refresh loop, and the
-> lookup contract around it are real. Set `STUB_ROLES_FILE` to a JSON file of
-> `{"member_no": ["role", ...]}` to exercise role-dependent code meanwhile.
-> That function's docstring lists the Scoutnet API details and pitfalls.
+That split is deliberate. Nothing project-specific lives here — no member types,
+no role names, no namespace — so reusing this service for another project means
+pointing `PROJECT_API_URL` somewhere else, not editing code. It also keeps the
+definition of a role next to the API that enforces it, rather than splitting
+producer and consumer across two repositories.
+
+The map is refreshed every `ROLE_SYNC_INTERVAL_MINUTES`, using `If-None-Match`
+so an unchanged upstream costs a 304 with no body. Lookups never block on that
+fetch: if the cache is cold or the project API is down, users get `DEFAULT_ROLES`
+and login still works.
 
 Users are looked up by the `member_no` claim, falling back to `sub`.
+
+Set `STUB_ROLES_FILE` to a JSON file of `{"member_no": ["role", ...]}` to
+exercise role-dependent code without the project API running.
 
 ## Running locally
 
