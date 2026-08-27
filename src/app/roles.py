@@ -13,12 +13,14 @@ enforces it, instead of splitting producer and consumer across two repositories.
 
 The map is fetched in bulk on a timer and held in memory, so lookups during login
 are synchronous and never block on that service — a login still succeeds if the
-cache is cold or the project API is down, the user simply gets no roles until it
-recovers.
+cache is cold or the project API is down, and the user gets `DEFAULT_ROLES` until
+it recovers.
 
-Only members the upstream lists get roles at all. Everyone else authenticates
-successfully and can do nothing, which is the intended behaviour rather than an
-error.
+Anyone the upstream does not list gets `DEFAULT_ROLES` too: authentication
+succeeds and confers only whatever those grant, which is the intended behaviour
+rather than an error. `DEFAULT_ROLES` is empty unless configured, so by default
+that means no roles at all — but it is a setting, not a guarantee, and a
+deployment that sets it grants those roles during an outage as well.
 """
 
 import asyncio
