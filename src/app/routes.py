@@ -32,6 +32,10 @@ router = APIRouter()
 # GET-to-GET hop, so the method-rewriting nuance of 303/307 does not arise.
 REDIRECT_STATUS = 302
 
+# Stands in for Keycloak's refresh token while FAKE_USER_ID is set. Never sent
+# anywhere: it only has to exist, so the session has the same shape as a real one.
+FAKE_REFRESH_TOKEN = "fake-user"
+
 
 def _redirect_uri_valid(uri: str | None) -> bool:
     """Allow only hosts on the configured allowlist.
@@ -83,6 +87,12 @@ async def login(
 ) -> Response:
     if not _redirect_uri_valid(redirect_uri):
         return PlainTextResponse("Invalid redirect URI", status_code=400)
+
+    if settings.FAKE_USER_ID:
+        # No IdP round-trip, so no PKCE or state to carry across it: the session
+        # is established here and the browser goes straight back to the app.
+        logger.warning("FAKE_USER_ID is set: signing in without the identity provider")
+        return _apply_fake_session(RedirectResponse(redirect_uri, status_code=REDIRECT_STATUS))
 
     code_verifier, code_challenge = oidc.generate_pkce_pair()
     state = oidc.generate_state()
@@ -201,6 +211,11 @@ async def refresh(request: Request) -> Response:
     refresh_token = request.cookies.get(constants.REFRESH_TOKEN)
     if not refresh_token:
         return _unauthorized()
+
+    if settings.FAKE_USER_ID:
+        # Re-mint from the same claims. Roles are looked up again, so a role
+        # change still lands within one token lifetime as it does for real users.
+        return _apply_fake_session(JSONResponse({}))
 
     try:
         upstream = await oidc.refresh_tokens(refresh_token)
@@ -545,22 +560,40 @@ def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
             # Not fatal: the id_token already established identity.
             logger.debug("Could not decode upstream access token for extra claims: %s", exc)
 
-    member_no = roles.member_no_from_claims(source_claims)
-    user_roles = roles.get_roles(member_no, source_claims)
-
-    our_token, expires_in = tokens.mint_access_token(source_claims, user_roles, member_no)
-
     # Keycloak sends refresh_expires_in, but it is not a standard OIDC field, so
     # treat it as optional rather than failing the login without it.
     refresh_expires_in = upstream.get("refresh_expires_in")
     if not isinstance(refresh_expires_in, int) or refresh_expires_in <= 0:
         refresh_expires_in = settings.DEFAULT_REFRESH_EXPIRES_IN
 
+    return _establish_session(
+        response,
+        source_claims,
+        refresh_token=upstream.get("refresh_token"),
+        id_token=id_token,
+        refresh_expires_in=refresh_expires_in,
+    )
+
+
+def _establish_session(
+    response: Response,
+    source_claims: dict[str, Any],
+    *,
+    refresh_token: str | None,
+    id_token: str | None,
+    refresh_expires_in: int,
+) -> Response:
+    """Mint our token from a set of identity claims and set the session cookies."""
+    member_no = roles.member_no_from_claims(source_claims)
+    user_roles = roles.get_roles(member_no, source_claims)
+
+    our_token, expires_in = tokens.mint_access_token(source_claims, user_roles, member_no)
+
     cookies.set_session_cookies(
         response,
         access_token=our_token,
         expires_in=expires_in,
-        refresh_token=upstream.get("refresh_token"),
+        refresh_token=refresh_token,
         id_token=id_token,
         refresh_expires_in=refresh_expires_in,
     )
@@ -573,3 +606,29 @@ def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
     )
 
     return response
+
+
+def _apply_fake_session(response: Response) -> Response:
+    """Establish a session from FAKE_USER_ID, with no identity provider involved.
+
+    The claims stand in for the ones the IdP would have returned, so everything
+    downstream — member number, role lookup, the minted token, the cookies — is
+    the ordinary path and behaves identically. Only the authentication is skipped.
+
+    No id_token is set: we have no IdP-issued one to set, and its absence is what
+    makes /logout fall through to a purely local logout instead of trying to end
+    a session that was never started.
+    """
+    claims = dict(settings.FAKE_USER_ID)
+    # Every real token has a subject; the validator guarantees one of the two.
+    claims.setdefault("sub", claims.get("preferred_username"))
+
+    return _establish_session(
+        response,
+        claims,
+        # A placeholder, but a real cookie: /refresh keeps requiring it, so a
+        # fake session still ends at /logout rather than reviving itself.
+        refresh_token=FAKE_REFRESH_TOKEN,
+        id_token=None,
+        refresh_expires_in=settings.DEFAULT_REFRESH_EXPIRES_IN,
+    )

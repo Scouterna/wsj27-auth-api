@@ -37,11 +37,16 @@ STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Both of these must succeed before we can serve a single request: without a
-    # signing key we cannot mint tokens, and without discovery we cannot reach
-    # the IdP. Failing here stops the pod rather than serving a broken service.
+    # Must succeed before we can serve a single request: without a signing key we
+    # cannot mint tokens. Failing here stops the pod rather than serving a broken
+    # service.
     init_keys()
-    await oidc.init_oidc()
+
+    # Same for discovery — except with a fake user, where the IdP is never called
+    # at all, so requiring it to be reachable would defeat the setting. start.py
+    # logs the warning about running that way.
+    if not settings.FAKE_USER_ID:
+        await oidc.init_oidc()
 
     # Not fatal — a half-configured service account only affects that client.
     init_service_clients()

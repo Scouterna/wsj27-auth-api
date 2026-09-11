@@ -5,7 +5,7 @@
 """
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # client simply asks for another token.
     SERVICE_TOKEN_TTL_SECONDS: int = 3600
 
+    # --- Dev-only: bypass the identity provider ---
+    # A JSON object of identity claims, as the IdP would have returned them.
+    # When set, /login and /refresh mint a session from it and no call is made
+    # to the IdP at all — not even discovery at startup. Anyone who reaches
+    # /login is signed in as this user, so it belongs in local testing only.
+    FAKE_USER_ID: dict[str, Any] = {}
+
     # --- Serving ---
     ROOT_PATH: str = ""
     PORT: int = 8000
@@ -92,6 +99,19 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("FAKE_USER_ID")
+    @classmethod
+    def _require_identity(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject a fake user we could not derive a subject for.
+
+        Without one of these the minted token has no `sub` and no member number,
+        so roles silently come out empty — exactly the sort of quiet wrongness
+        that makes a test look like a bug in the app under test.
+        """
+        if value and not (value.get("sub") or value.get("preferred_username")):
+            raise ValueError("FAKE_USER_ID needs a 'sub' or 'preferred_username' claim")
         return value
 
     @property

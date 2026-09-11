@@ -51,6 +51,20 @@ if not settings.DEBUG:
 
 logging.info("Starting wsj27-auth-api on port %d", settings.PORT)
 
+if settings.FAKE_USER_ID:
+    banner = "!" * 72
+    logging.warning(
+        "%s\n"
+        "!! FAKE_USER_ID is set — normal login is BYPASSED.\n"
+        "!! /login signs in %s without authenticating anyone, and /refresh re-mints\n"
+        "!! for them. The identity provider is never contacted, not even for discovery.\n"
+        "!! This must never be set in production.\n"
+        "%s",
+        banner,
+        settings.FAKE_USER_ID.get("preferred_username") or settings.FAKE_USER_ID.get("sub"),
+        banner,
+    )
+
 try:
     uvicorn.run(
         "app.main:app",
