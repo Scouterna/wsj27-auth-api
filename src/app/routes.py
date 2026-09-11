@@ -259,6 +259,7 @@ async def refresh(request: Request) -> Response:
                             "givenName": "Test",
                             "familyName": "Testsson",
                             "email": "test@example.se",
+                            "picture": "https://example.se/avatars/1234567.jpg",
                             "memberNo": "1234567",
                             "roles": ["wsj27-app:admin", "wsj27-participant"],
                         }
@@ -290,6 +291,7 @@ async def user(request: Request) -> Response:
                 "givenName": claims.get("given_name"),
                 "familyName": claims.get("family_name"),
                 "email": claims.get("email"),
+                "picture": claims.get("picture"),
                 "memberNo": claims.get("member_no"),
                 "roles": tokens.extract_roles(claims),
             }
@@ -518,6 +520,7 @@ async def openid_configuration() -> Response:
                 "given_name",
                 "family_name",
                 "email",
+                "picture",
                 "member_no",
                 "realm_access",
                 "resource_access",

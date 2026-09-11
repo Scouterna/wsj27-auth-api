@@ -40,6 +40,7 @@ IDENTITY_CLAIMS = (
     "email",
     "email_verified",
     "locale",
+    "picture",
 )
 
 
