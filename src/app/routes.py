@@ -536,6 +536,11 @@ class _SessionError(Exception):
 
 def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
     """Mint our token from an upstream token response and set the cookies."""
+    logger.debug(
+        "Upstream token response from %s: %s",
+        settings.OIDC_SERVER,
+        {k: upstream.get(k) for k in ("expires_in", "refresh_expires_in", "token_type", "scope")},
+    )
     access_token = upstream.get("access_token")
     if not access_token:
         raise _SessionError("Upstream response contained no access_token")
