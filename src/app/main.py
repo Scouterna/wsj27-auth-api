@@ -120,6 +120,11 @@ async def no_cache_headers(request: Request, call_next):
     return response
 
 
+# --- Add metrics API ---
+instrumentator.instrument(app)
+instrumentator.expose(app)
+
+# --- Include the API routers ---
 app.include_router(router)
 
 
