@@ -7,7 +7,7 @@
 from functools import lru_cache
 from typing import Annotated, Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     # /login is signed in as this user, so it belongs in local testing only.
     FAKE_USER_ID: dict[str, Any] = {}
 
+    # --- Dev-only: impersonation ---
+    # Lets a signed-in user holding IMPERSONATOR_ROLE become another member — their
+    # member number and roles — via POST /impersonate, until they log out or the
+    # fixed lifetime runs out. Off unless set; it must never be set in production.
+    ALLOW_IMPERSONATION: bool = False
+    # The role that permits it. Granted by the project API like any other role;
+    # named here in config because this service defines no roles of its own.
+    IMPERSONATOR_ROLE: str = ""
+    # Absolute lifetime of an impersonation. Refreshing does not extend it.
+    IMPERSONATION_TTL_SECONDS: int = 1800
+
     # --- Serving ---
     ROOT_PATH: str = ""
     PORT: int = 8000
@@ -113,6 +124,19 @@ class Settings(BaseSettings):
         if value and not (value.get("sub") or value.get("preferred_username")):
             raise ValueError("FAKE_USER_ID needs a 'sub' or 'preferred_username' claim")
         return value
+
+    @model_validator(mode="after")
+    def _require_impersonator_role(self) -> Settings:
+        """Refuse to enable impersonation with nobody allowed to use it.
+
+        Caught here rather than at the first request, where it would look like a
+        permissions problem instead of a missing setting.
+        """
+        if self.ALLOW_IMPERSONATION and not self.IMPERSONATOR_ROLE:
+            raise ValueError("ALLOW_IMPERSONATION is set but IMPERSONATOR_ROLE is empty")
+        if self.IMPERSONATION_TTL_SECONDS <= 0:
+            raise ValueError("IMPERSONATION_TTL_SECONDS must be positive")
+        return self
 
     @property
     def issuer(self) -> str:

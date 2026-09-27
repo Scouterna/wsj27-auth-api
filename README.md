@@ -41,6 +41,7 @@ its ID token is kept as the `id_token_hint` for RP-initiated logout.
 | `GET /.well-known/openid-configuration` | Our discovery document. |
 | `GET /static/refresh.js` | Client-side auto-refresh loop for consumer apps to embed. |
 | `POST /token` | Service-account token via the client-credentials grant. For machine callers. |
+| `POST /impersonate` | Become another member, for testing and demos. Only exists when `ALLOW_IMPERSONATION` is set — see [Impersonating another member](#impersonating-another-member-test-environments). |
 | `GET /docs` | Swagger UI (also `/redoc`, `/openapi.json`). |
 | `GET /` | Health check. |
 
@@ -193,6 +194,47 @@ project-api to test a role. `/logout` ends the session normally.
 Anyone who reaches `/login` is signed in as this user, so it is for local
 testing only. The service logs a warning at startup and on every login while it
 is set.
+
+### Impersonating another member (test environments)
+
+For testing and demonstrating what a given member can see, a signed-in user can
+become another member without logging out. It's enabled per environment:
+
+```bash
+ALLOW_IMPERSONATION=true
+IMPERSONATOR_ROLE=wsj27-app:impersonator   # whichever role project-api grants for this
+```
+
+An app calls it with `fetch`:
+
+```js
+await fetch("/auth/impersonate", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ member_no: "1234567" }),
+});
+```
+
+The session is replaced outright. The caller gets the target's member number
+and roles, keeps their own name and email, and loses `picture`. Consumers
+write the picture back to the member record, so keeping it would put the
+caller's avatar on the target's record. Apps see an ordinary token and need
+no changes. Anything done while impersonating is attributed to the target
+member. Each switch is logged at WARNING with the real user behind it.
+
+- **Who:** the caller's current roles must include `IMPERSONATOR_ROLE`. A caller
+  already impersonating holds the target's roles, so switching again needs the
+  target to hold it too.
+- **Whom:** only members project-api lists. Anyone else gets `404`, rather than
+  quietly showing the default view.
+- **How long:** `IMPERSONATION_TTL_SECONDS` (default 30 minutes), fixed.
+  Refreshing doesn't extend it. When it runs out, `/refresh` answers `401`, the
+  same as any ended session.
+- **Way back:** `/logout`. It ends only our session, so the next `/login` signs
+  the real user straight back in through the still-open Keycloak session.
+
+With the flag off, the route doesn't exist at all. Turning it off also ends
+live impersonations at their next refresh. It must never be set in production.
 
 ### With docker-compose
 

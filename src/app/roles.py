@@ -287,6 +287,22 @@ def get_roles(member_no: str | None, claims: dict[str, Any] | None = None) -> li
     return list(settings.DEFAULT_ROLES)
 
 
+def lookup(member_no: str) -> list[str] | None:
+    """A member's own roles, or None if the upstream does not list them.
+
+    Unlike get_roles() there is no fallback to DEFAULT_ROLES: impersonation
+    needs to tell "this member" from "anyone", or a typo would silently show the
+    default view and pass it off as the member's.
+    """
+    roles = _cache.get(member_no)
+    return list(roles) if roles is not None else None
+
+
+def cache_loaded() -> bool:
+    """Whether the cache has been filled at least once."""
+    return _last_refresh is not None
+
+
 def cache_status() -> dict[str, Any]:
     """Cache state, for the health endpoint."""
     return {

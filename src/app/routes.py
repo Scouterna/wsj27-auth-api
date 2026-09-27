@@ -12,11 +12,13 @@ same kind of token to machine callers via the client-credentials grant.
 import base64
 import binascii
 import logging
+import time
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 
 from . import constants, cookies, oidc, roles, service_clients, tokens
 from .config import get_settings
@@ -60,6 +62,13 @@ def _redirect_uri_valid(uri: str | None) -> bool:
 
 def _unauthorized() -> JSONResponse:
     return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
+def _end_session() -> JSONResponse:
+    """A 401 that also clears the session, so the client stops retrying."""
+    response = _unauthorized()
+    cookies.clear_auth_cookies(response)
+    return response
 
 
 @router.get(
@@ -212,6 +221,30 @@ async def refresh(request: Request) -> Response:
     if not refresh_token:
         return _unauthorized()
 
+    # Checked before everything else, FAKE_USER_ID included: an impersonated
+    # session has no Keycloak session behind it, and the fake-user branch would
+    # quietly replace it with the fake user.
+    try:
+        impersonation = tokens.verify_impersonation_token(refresh_token)
+    except tokens.TokenError as exc:
+        logger.info("Impersonated session ended: %s", exc)
+        return _end_session()
+
+    if impersonation is not None:
+        if not settings.ALLOW_IMPERSONATION:
+            # Switching the flag off ends live impersonations at their next
+            # refresh, rather than letting them run out their lifetime.
+            logger.warning("Impersonation is disabled; ending impersonated session")
+            return _end_session()
+
+        # The same refresh token goes back out unchanged, so its expiry never moves.
+        access_token, expires_in = _mint_impersonated_access_token(
+            impersonation["identity"], impersonation["member_no"], impersonation["exp"]
+        )
+        return _set_impersonated_session(
+            JSONResponse({}), access_token, expires_in, refresh_token, impersonation["exp"]
+        )
+
     if settings.FAKE_USER_ID:
         # Re-mint from the same claims. Roles are looked up again, so a role
         # change still lands within one token lifetime as it does for real users.
@@ -222,9 +255,7 @@ async def refresh(request: Request) -> Response:
     except oidc.OIDCError as exc:
         if exc.error == "invalid_grant":
             # The session is genuinely over; clear it so the client stops retrying.
-            response = _unauthorized()
-            cookies.clear_auth_cookies(response)
-            return response
+            return _end_session()
         logger.error("Token refresh failed: %s", exc)
         return JSONResponse({"error": "Upstream error"}, status_code=502)
 
@@ -283,20 +314,23 @@ async def user(request: Request) -> Response:
         logger.info("Rejected access token: %s", exc)
         return _unauthorized()
 
-    return JSONResponse(
-        {
-            "user": {
-                "name": claims.get("name"),
-                "preferredUsername": claims.get("preferred_username"),
-                "givenName": claims.get("given_name"),
-                "familyName": claims.get("family_name"),
-                "email": claims.get("email"),
-                "picture": claims.get("picture"),
-                "memberNo": claims.get("member_no"),
-                "roles": tokens.extract_roles(claims),
-            }
+    return JSONResponse(_user_body(claims))
+
+
+def _user_body(claims: dict[str, Any]) -> dict[str, Any]:
+    """The /user response for a set of verified access-token claims."""
+    return {
+        "user": {
+            "name": claims.get("name"),
+            "preferredUsername": claims.get("preferred_username"),
+            "givenName": claims.get("given_name"),
+            "familyName": claims.get("family_name"),
+            "email": claims.get("email"),
+            "picture": claims.get("picture"),
+            "memberNo": claims.get("member_no"),
+            "roles": tokens.extract_roles(claims),
         }
-    )
+    }
 
 
 def _oauth_error(error: str, description: str, status_code: int = 400) -> JSONResponse:
@@ -640,3 +674,151 @@ def _apply_fake_session(response: Response) -> Response:
         id_token=None,
         refresh_expires_in=settings.DEFAULT_REFRESH_EXPIRES_IN,
     )
+
+
+# --- Impersonation (dev only) -------------------------------------------------
+#
+# For testing and demonstrating what another member can see. The session is
+# replaced outright rather than annotated: consumers get an ordinary token for
+# the impersonated member and cannot tell the difference, which is the point.
+# Logging out is the only way back.
+
+
+class ImpersonateRequest(BaseModel):
+    member_no: str = Field(..., min_length=1, description="The member to become.", examples=["1234567"])
+
+
+async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
+    # CSRF: SameSite=Lax keeps our cookies off cross-site POSTs already, and
+    # FastAPI only parses this body from a JSON content type, which a plain
+    # HTML form cannot send. Origin is checked too, when the browser sends one.
+    origin = request.headers.get("origin")
+    if origin is not None and not _redirect_uri_valid(origin):
+        return JSONResponse({"error": "Origin not allowed"}, status_code=403)
+
+    access_token = request.cookies.get(constants.ACCESS_TOKEN)
+    if not access_token:
+        return _unauthorized()
+
+    try:
+        claims = tokens.verify_access_token(access_token)
+    except tokens.TokenError as exc:
+        logger.info("Rejected access token: %s", exc)
+        return _unauthorized()
+
+    # Read from the token, so a caller already impersonating holds the target's
+    # roles: switching on requires the target to hold this role as well.
+    if settings.IMPERSONATOR_ROLE not in tokens.extract_roles(claims):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+    target = body.member_no.strip()
+
+    if not roles.cache_loaded():
+        return JSONResponse({"error": "Roles are not loaded yet"}, status_code=503)
+
+    # Only members the upstream lists: anyone else would get DEFAULT_ROLES, and
+    # a mistyped number would pass that off as the member's own view.
+    if roles.lookup(target) is None:
+        return JSONResponse({"error": "Unknown member"}, status_code=404)
+
+    identity = _impersonated_identity(claims, target)
+    expires_at = int(time.time()) + settings.IMPERSONATION_TTL_SECONDS
+
+    new_access_token, expires_in = _mint_impersonated_access_token(identity, target, expires_at)
+    refresh_token = tokens.mint_impersonation_token(identity, target, expires_at)
+
+    # WARNING, not INFO: whatever is done from here on is attributed to the
+    # target member, and this line is the only record of who was really behind it.
+    logger.warning(
+        "%s (sub=%s, member_no=%s) is now impersonating member %s for %ds",
+        claims.get("name"),
+        claims.get("sub"),
+        claims.get("member_no"),
+        target,
+        settings.IMPERSONATION_TTL_SECONDS,
+    )
+
+    response = JSONResponse(_user_body(tokens.verify_access_token(new_access_token)))
+    return _set_impersonated_session(response, new_access_token, expires_in, refresh_token, expires_at)
+
+
+def _impersonated_identity(claims: dict[str, Any], target: str) -> dict[str, Any]:
+    """The caller's identity claims, adjusted to belong to `target`.
+
+    Name and email stay the caller's; the member number is what consumers look a
+    user's own data up by, and that is set to the target's when minting.
+
+    `picture` is dropped because consumers write it back to the member record
+    keyed by member number — keeping it would put the caller's avatar on the
+    target's record.
+
+    `preferred_username` follows the member number when it ends with it, so a
+    consumer parsing the number out of the username agrees with `member_no`. A
+    plain suffix match, so the IdP's username format is never hardcoded here.
+    """
+    identity = {name: claims[name] for name in tokens.IDENTITY_CLAIMS if name in claims and name != "picture"}
+
+    current = claims.get("member_no")
+    username = identity.get("preferred_username")
+    if isinstance(current, str) and current and isinstance(username, str) and username.endswith(current):
+        prefix = username.removesuffix(current)
+        # "scoutnet|1234567" ends with "4567" too; only a whole number counts.
+        if not prefix or not prefix[-1].isdigit():
+            identity["preferred_username"] = prefix + target
+
+    return identity
+
+
+def _mint_impersonated_access_token(identity: dict[str, Any], member_no: str, expires_at: int) -> tuple[str, int]:
+    """Mint the access token of an impersonated session.
+
+    Roles are looked up afresh on every refresh, so a change upstream lands
+    within one token lifetime, as it does for a real session. The token never
+    outlives the impersonation itself.
+    """
+    remaining = max(1, expires_at - int(time.time()))
+    return tokens.mint_access_token(identity, roles.get_roles(member_no), member_no, expires_in=remaining)
+
+
+def _set_impersonated_session(
+    response: Response, access_token: str, expires_in: int, refresh_token: str, expires_at: int
+) -> Response:
+    """Set the cookies of an impersonated session."""
+    cookies.set_session_cookies(
+        response,
+        access_token=access_token,
+        expires_in=expires_in,
+        refresh_token=refresh_token,
+        id_token=None,
+        refresh_expires_in=max(1, expires_at - int(time.time())),
+    )
+    # Keycloak's id_token is the real user's. Without it /logout ends only our
+    # session and leaves Keycloak's alive, so the next /login silently signs the
+    # real user back in — which is what makes logout the way back.
+    cookies.delete_cookie(response, constants.ID_TOKEN)
+    return response
+
+
+# Registered only when enabled, so a deployment without it has no such route at
+# all: a plain 404, and nothing in the OpenAPI document to suggest otherwise.
+if settings.ALLOW_IMPERSONATION:
+    router.post(
+        "/impersonate",
+        tags=["public"],
+        summary="Become another member (dev only)",
+        description=(
+            "Replaces the current session with one for another member: their "
+            "member number and their roles. Name and email stay the caller's; "
+            "`picture` is dropped. Consumers receive an ordinary token.\n\n"
+            "Requires the configured impersonator role. Lasts a fixed time that "
+            "refreshing does not extend; logging out is the only way back.\n\n"
+            "Call with `fetch` and a JSON body. Only enabled in test environments."
+        ),
+        responses={
+            200: {"description": "Now impersonating; new cookies set. Returns the new `user`."},
+            401: {"description": "No valid session."},
+            403: {"description": "Not permitted, or the request came from a disallowed origin."},
+            404: {"description": "The member has no roles in this project."},
+            503: {"description": "Roles have not been loaded yet."},
+        },
+    )(impersonate)
