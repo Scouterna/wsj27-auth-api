@@ -13,6 +13,7 @@ EXPIRES_AT = f"{COOKIE_PREFIX}expires-at"
 REFRESH_EXPIRES_AT = f"{COOKIE_PREFIX}refresh-expires-at"
 OIDC_CODE_VERIFIER = f"{COOKIE_PREFIX}oidc-code-verifier"
 OIDC_STATE = f"{COOKIE_PREFIX}oidc-state"
+OIDC_NONCE = f"{COOKIE_PREFIX}oidc-nonce"
 REDIRECT_URI = f"{COOKIE_PREFIX}redirect-uri"
 
 # Every cookie this app sets. Logout and the failure paths clear all of them.
@@ -24,11 +25,12 @@ ALL_COOKIES = (
     REFRESH_EXPIRES_AT,
     OIDC_CODE_VERIFIER,
     OIDC_STATE,
+    OIDC_NONCE,
     REDIRECT_URI,
 )
 
 # Cookies that only exist for the duration of one login round-trip.
-TRANSIENT_COOKIES = (OIDC_CODE_VERIFIER, OIDC_STATE, REDIRECT_URI)
+TRANSIENT_COOKIES = (OIDC_CODE_VERIFIER, OIDC_STATE, OIDC_NONCE, REDIRECT_URI)
 
 # Lifetime of the transient login cookies.
 LOGIN_FLOW_TTL_SECONDS = 30 * 60

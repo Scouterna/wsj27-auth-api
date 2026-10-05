@@ -37,12 +37,20 @@ REDIRECT_STATUS = 302
 FAKE_REFRESH_TOKEN = "fake-user"
 
 
-def _redirect_uri_valid(uri: str | None) -> bool:
-    """Allow only hosts on the configured allowlist.
+# Hosts where a plain-http redirect is acceptable: traffic to them never leaves
+# the machine, so there is no network for a downgrade to be exploited on. This is
+# what lets a local dev server on http://localhost:5173 work.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
-    Host-only matching: the port is part of the comparison (so "localhost:5173"
-    is distinct from "localhost"), but scheme and path are not checked, since
-    apps redirect back to arbitrary in-app paths.
+
+def _redirect_uri_valid(uri: str | None) -> bool:
+    """Allow only https URLs on hosts in the configured allowlist.
+
+    The port is part of the host comparison (so "localhost:5173" is distinct from
+    "localhost"). The path is not checked, since apps redirect back to arbitrary
+    in-app paths. The scheme is: an http redirect to an allowed host would hand a
+    network attacker the user's first request after login. Loopback hosts are
+    the exception, see LOOPBACK_HOSTS.
     """
     if not uri:
         return False
@@ -52,10 +60,12 @@ def _redirect_uri_valid(uri: str | None) -> bool:
     except ValueError:
         return False
 
-    if not parsed.netloc:
+    if not parsed.netloc or parsed.netloc not in settings.ALLOWED_REDIRECT_DOMAINS:
         return False
 
-    return parsed.netloc in settings.ALLOWED_REDIRECT_DOMAINS
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS
 
 
 def _unauthorized() -> JSONResponse:
@@ -96,10 +106,12 @@ async def login(
 
     code_verifier, code_challenge = oidc.generate_pkce_pair()
     state = oidc.generate_state()
+    nonce = oidc.generate_nonce()
 
     authorization_url = oidc.build_authorization_url(
         code_challenge=code_challenge,
         state=state,
+        nonce=nonce,
         silent=silent == "true",
         locale=locale,
     )
@@ -109,6 +121,7 @@ async def login(
         response,
         code_verifier=code_verifier,
         state=state,
+        nonce=nonce,
         redirect_uri=redirect_uri,
     )
     return response
@@ -162,6 +175,10 @@ async def callback(request: Request) -> Response:
         logger.warning("State mismatch on callback")
         return PlainTextResponse("Invalid state", status_code=400)
 
+    nonce = request.cookies.get(constants.OIDC_NONCE)
+    if not nonce:
+        return PlainTextResponse("Missing nonce", status_code=400)
+
     code = request.query_params.get("code")
     if not code:
         return PlainTextResponse("Missing authorization code", status_code=400)
@@ -177,7 +194,9 @@ async def callback(request: Request) -> Response:
         return PlainTextResponse("Authentication failed", status_code=502)
 
     try:
-        response = _apply_session(RedirectResponse(final_redirect_uri, status_code=REDIRECT_STATUS), upstream)
+        response = await _apply_session(
+            RedirectResponse(final_redirect_uri, status_code=REDIRECT_STATUS), upstream, nonce=nonce
+        )
     except _SessionError as exc:
         logger.error("Could not establish session: %s", exc)
         return PlainTextResponse("Authentication failed", status_code=502)
@@ -231,7 +250,7 @@ async def refresh(request: Request) -> Response:
     try:
         # Roles are recomputed here, so a role change takes effect within one
         # access-token lifetime instead of requiring a fresh login.
-        return _apply_session(JSONResponse({}), upstream)
+        return await _apply_session(JSONResponse({}), upstream)
     except _SessionError as exc:
         logger.error("Could not refresh session: %s", exc)
         return JSONResponse({"error": "Upstream error"}, status_code=502)
@@ -534,8 +553,12 @@ class _SessionError(Exception):
     """The upstream token response could not be turned into a session."""
 
 
-def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
-    """Mint our token from an upstream token response and set the cookies."""
+async def _apply_session(response: Response, upstream: dict[str, Any], *, nonce: str | None = None) -> Response:
+    """Mint our token from an upstream token response and set the cookies.
+
+    `nonce` is given on the callback only, and then an id_token is required to
+    carry it back: without one there is nothing to check the nonce against.
+    """
     logger.debug(
         "Upstream token response from %s: %s",
         settings.OIDC_SERVER,
@@ -546,15 +569,17 @@ def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
         raise _SessionError("Upstream response contained no access_token")
 
     id_token = upstream.get("id_token")
+    if nonce is not None and not id_token:
+        raise _SessionError("Upstream response contained no id_token to check the nonce against")
 
     # Prefer the id_token as the identity source and verify its audience: it is
     # the token OIDC defines as proof of authentication. Fall back to the access
     # token for realms that do not return one on refresh.
     try:
         if id_token:
-            source_claims = oidc.decode_upstream_token(id_token, verify_audience=True)
+            source_claims = await oidc.decode_upstream_token(id_token, verify_audience=True, nonce=nonce)
         else:
-            source_claims = oidc.decode_upstream_token(access_token)
+            source_claims = await oidc.decode_upstream_token(access_token)
     except Exception as exc:
         raise _SessionError(f"Could not verify upstream token: {exc}") from exc
 
@@ -562,7 +587,7 @@ def _apply_session(response: Response, upstream: dict[str, Any]) -> Response:
         # The access token often carries claims the id_token lacks (member_no
         # among them, depending on realm mappers). Fill in without overriding.
         try:
-            for name, value in oidc.decode_upstream_token(access_token).items():
+            for name, value in (await oidc.decode_upstream_token(access_token)).items():
                 source_claims.setdefault(name, value)
         except Exception as exc:
             # Not fatal: the id_token already established identity.

@@ -44,8 +44,9 @@ its ID token is kept as the `id_token_hint` for RP-initiated logout.
 | `GET /docs` | Swagger UI (also `/redoc`, `/openapi.json`). |
 | `GET /` | Health check. |
 
-`redirect_uri` must be on a host in `ALLOWED_REDIRECT_DOMAINS`, or the request is
-rejected with `400`.
+`redirect_uri` must be an `https` URL on a host in `ALLOWED_REDIRECT_DOMAINS`, or
+the request is rejected with `400`. Plain `http` is accepted only for `localhost`,
+`127.0.0.1` and `::1`, for local dev servers.
 
 ## Cookies
 
@@ -59,7 +60,7 @@ Prefix `wsj27-auth_`, all `Path=/`, `SameSite=Lax`, `Secure` unless
 | `id-token` | Keycloak's ID token (logout hint) | yes |
 | `refresh-expires-at` | ms epoch | yes |
 | `expires-at` | ms epoch | **no** — `refresh.js` reads it |
-| `oidc-code-verifier`, `oidc-state`, `redirect-uri` | login round-trip only, 30 min | yes |
+| `oidc-code-verifier`, `oidc-state`, `oidc-nonce`, `redirect-uri` | login round-trip only, 30 min | yes |
 
 ## Consuming the session
 

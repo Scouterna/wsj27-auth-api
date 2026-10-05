@@ -77,8 +77,10 @@ def clear_transient_cookies(response: Response) -> None:
         delete_cookie(response, name)
 
 
-def set_login_flow_cookies(response: Response, *, code_verifier: str, state: str, redirect_uri: str) -> None:
-    """Carry the PKCE verifier, CSRF state and destination across the redirect.
+def set_login_flow_cookies(
+    response: Response, *, code_verifier: str, state: str, nonce: str, redirect_uri: str
+) -> None:
+    """Carry the PKCE verifier, CSRF state, nonce and destination across the redirect.
 
     This is the only "session" the service has — there is no server-side store,
     which is what keeps it stateless and horizontally scalable.
@@ -86,6 +88,7 @@ def set_login_flow_cookies(response: Response, *, code_verifier: str, state: str
     ttl = constants.LOGIN_FLOW_TTL_SECONDS
     set_cookie(response, constants.OIDC_CODE_VERIFIER, code_verifier, max_age=ttl)
     set_cookie(response, constants.OIDC_STATE, state, max_age=ttl)
+    set_cookie(response, constants.OIDC_NONCE, nonce, max_age=ttl)
     set_cookie(response, constants.REDIRECT_URI, redirect_uri, max_age=ttl)
 
 
