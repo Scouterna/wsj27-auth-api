@@ -226,4 +226,6 @@ identical on every replica.
   There is no in-process state otherwise, so the service scales horizontally.
 - Every host in `ALLOWED_REDIRECT_DOMAINS` must also be registered as a valid
   post-logout redirect URI on the Keycloak client, or logout will strand users.
-- Not yet written: CI and a test suite.
+- CI (`.github/workflows/build-and-publish.yml`) builds and publishes the image
+  on pushes to `main` and `dev`. It does not run the tests in `tests/`; run them
+  locally with `uv run pytest`.

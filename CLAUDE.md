@@ -119,10 +119,13 @@ comments, or docs. They will only age badly.
 
 ## Testing
 
-There is no committed test suite yet. Changes to the token, cookie, or login
-paths should at minimum be exercised end to end — the login round-trip, a
-refresh, a machine-token grant, and verifying an issued token against the
-published JWKS the way a consumer would.
+Unit tests live in `tests/` and run with `uv run pytest`. CI does not run them —
+it only builds and publishes the image — so run them before pushing.
+
+They stub the network, so they do not replace an end-to-end check. Changes to
+the token, cookie, or login paths should at minimum be exercised end to end —
+the login round-trip, a refresh, a machine-token grant, and verifying an issued
+token against the published JWKS the way a consumer would.
 
 ## Git workflow
 
@@ -139,7 +142,7 @@ deferred — see "Later" below; don't assume they're in place).
 - **`dev`** — integration branch. All feature branches merge here first and
   accumulate, so multiple in-progress features can be tested together. Every
   push to `dev` triggers CI too, publishing `:dev`. The dev k8s environment
-  (`wsj27-infra/envs/dev/wsj27-auth-api.yaml`) tracks `:dev`.
+  (`wsj27-infra/k8s/dev/wsj27-auth-api.yaml`) tracks `:dev`.
 - **`feat/...`** — cut from `dev`, merged back into `dev` with a local
   `git merge` (no PR yet) once ready to test alongside whatever else is there.
 - **`hotfix/...`** — cut from `main`, for changes that must reach prod without
@@ -149,7 +152,7 @@ deferred — see "Later" below; don't assume they're in place).
 
 The only two things that ever affect prod: pushing to `main` (produces a new
 candidate image), and manually bumping the SHA pin in
-`wsj27-infra/envs/prod/wsj27-auth-api.yaml` + applying it. Pushing to `dev`
+`wsj27-infra/k8s/prod/wsj27-auth-api.yaml` + applying it. Pushing to `dev`
 never touches prod.
 
 This retires the old per-cluster `k8s/` overlays (homelab/wstest/scoutweb,
@@ -185,7 +188,7 @@ git push origin main
 ```
 Watch CI (`gh run list` / `gh run watch`), get the new short SHA
 (`git rev-parse --short HEAD`), bump the image tag in
-`wsj27-infra/envs/prod/wsj27-auth-api.yaml` to that SHA, apply, and
+`wsj27-infra/k8s/prod/wsj27-auth-api.yaml` to that SHA, apply, and
 `rollout restart` in the `proj-wsj27-prod` namespace.
 
 **Hotfix straight to prod, bypassing untested `dev` work:**
