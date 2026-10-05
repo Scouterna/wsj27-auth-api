@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     # member number and roles — via POST /impersonate, until they log out or the
     # fixed lifetime runs out. Off unless set; it must never be set in production.
     ALLOW_IMPERSONATION: bool = False
-    # The role that permits it. Granted by the project API like any other role;
+    # The role that permits it, or any role beneath it ("wsj27:cmt" admits
+    # "wsj27:cmt:admin:medlem"). Granted by the project API like any other role;
     # named here in config because this service defines no roles of its own.
     IMPERSONATOR_ROLE: str = ""
     # Absolute lifetime of an impersonation. Refreshing does not extend it.

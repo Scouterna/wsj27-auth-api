@@ -708,7 +708,7 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
 
     # Read from the token, so a caller already impersonating holds the target's
     # roles: switching on requires the target to hold this role as well.
-    if settings.IMPERSONATOR_ROLE not in tokens.extract_roles(claims):
+    if not tokens.has_role(tokens.extract_roles(claims), settings.IMPERSONATOR_ROLE):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
 
     target = body.member_no.strip()

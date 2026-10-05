@@ -222,7 +222,8 @@ caller's avatar on the target's record. Apps see an ordinary token and need
 no changes. Anything done while impersonating is attributed to the target
 member. Each switch is logged at WARNING with the real user behind it.
 
-- **Who:** the caller's current roles must include `IMPERSONATOR_ROLE`. A caller
+- **Who:** the caller must hold `IMPERSONATOR_ROLE` or a role beneath it, so
+  `wsj27:cmt` also admits `wsj27:cmt:admin:medlem` (but not `wsj27:cmtx`). A caller
   already impersonating holds the target's roles, so switching again needs the
   target to hold it too.
 - **Whom:** only members project-api lists. Anyone else gets `404`, rather than

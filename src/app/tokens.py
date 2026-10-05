@@ -246,6 +246,18 @@ def verify_access_token(token: str) -> dict[str, Any]:
     return dict(decoded.claims)
 
 
+def has_role(held_roles: list[str], required: str) -> bool:
+    """True if any held role is `required` or a more specific role beneath it.
+
+    "wsj27:cmt" is satisfied by "wsj27:cmt:admin:medlem", matching how the
+    project API reads its own roles. Compared colon-segment-wise rather than
+    with str.startswith(), which would let "wsj27:cmtx" pass as "wsj27:cmt".
+    """
+    required_segments = required.split(":")
+    depth = len(required_segments)
+    return any(role.split(":")[:depth] == required_segments for role in held_roles)
+
+
 def extract_roles(claims: dict[str, Any]) -> list[str]:
     """Flatten our role claims back into a single list.
 
