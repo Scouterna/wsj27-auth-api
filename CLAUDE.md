@@ -80,8 +80,14 @@ them to `/auth` and cross-app reads work only by accident.
 
 **Impersonation replaces the session; it does not annotate it.** `POST
 /impersonate` (dev only, `ALLOW_IMPERSONATION`) mints an ordinary token with
-the target's `member_no` and roles. No `act` claim is added, so consumers
-cannot tell and need nothing. Three details are deliberate:
+the target's `member_no`, roles and name. No `act` claim is added, so consumers
+cannot tell and need nothing. Four details are deliberate:
+- The name comes from project-api's participant endpoint, called with the
+  *caller's* token, not our service account's. The endpoint is
+  access-controlled, and borrowing the caller's access means the service
+  account needs no grant to every participant's data. The name is fetched once
+  and carried in the impersonation token. A failed lookup keeps the caller's
+  name rather than failing the switch.
 - `picture` is always dropped, because project-api writes it back to the member
   record keyed by `member_no`.
 - `preferred_username` follows the member number only by suffix match, so the

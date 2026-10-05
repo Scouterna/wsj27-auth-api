@@ -20,7 +20,7 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from . import constants, cookies, oidc, roles, service_clients, tokens
+from . import constants, cookies, oidc, participants, roles, service_clients, tokens
 from .config import get_settings
 from .keys import get_jwks
 
@@ -721,7 +721,11 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
     if roles.lookup(target) is None:
         return JSONResponse({"error": "Unknown member"}, status_code=404)
 
-    identity = _impersonated_identity(claims, target)
+    # Fetched once, here; it then travels in the impersonation token, so
+    # /refresh never calls the project API. None keeps the caller's own name.
+    target_name = await participants.fetch_name(target, access_token)
+
+    identity = _impersonated_identity(claims, target, target_name)
     expires_at = int(time.time()) + settings.IMPERSONATION_TTL_SECONDS
 
     new_access_token, expires_in = _mint_impersonated_access_token(identity, target, expires_at)
@@ -730,11 +734,12 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
     # WARNING, not INFO: whatever is done from here on is attributed to the
     # target member, and this line is the only record of who was really behind it.
     logger.warning(
-        "%s (sub=%s, member_no=%s) is now impersonating member %s for %ds",
+        "%s (sub=%s, member_no=%s) is now impersonating member %s (%s) for %ds",
         claims.get("name"),
         claims.get("sub"),
         claims.get("member_no"),
         target,
+        target_name or "name not found, keeping the caller's",
         settings.IMPERSONATION_TTL_SECONDS,
     )
 
@@ -742,11 +747,17 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
     return _set_impersonated_session(response, new_access_token, expires_in, refresh_token, expires_at)
 
 
-def _impersonated_identity(claims: dict[str, Any], target: str) -> dict[str, Any]:
+def _impersonated_identity(claims: dict[str, Any], target: str, target_name: str | None) -> dict[str, Any]:
     """The caller's identity claims, adjusted to belong to `target`.
 
-    Name and email stay the caller's; the member number is what consumers look a
-    user's own data up by, and that is set to the target's when minting.
+    The member number is what consumers look a user's own data up by, and that
+    is set to the target's when minting. The name follows when `target_name` is
+    known, so a demonstration shows who is being shown; otherwise it stays the
+    caller's. `sub` and email always stay the caller's.
+
+    The project API has the name only as one "first last" string, so it is
+    split at the first space: right for most names, wrong for a double first
+    name. Only consumers reading given_name/family_name see the difference.
 
     `picture` is dropped because consumers write it back to the member record
     keyed by member number — keeping it would put the caller's avatar on the
@@ -765,6 +776,13 @@ def _impersonated_identity(claims: dict[str, Any], target: str) -> dict[str, Any
         # "scoutnet|1234567" ends with "4567" too; only a whole number counts.
         if not prefix or not prefix[-1].isdigit():
             identity["preferred_username"] = prefix + target
+
+    if target_name:
+        given_name, _, family_name = target_name.partition(" ")
+        identity["name"] = target_name
+        identity["given_name"] = given_name
+        # Present even when empty: consumers commonly model it as required.
+        identity["family_name"] = family_name
 
     return identity
 
@@ -808,7 +826,7 @@ if settings.ALLOW_IMPERSONATION:
         summary="Become another member (dev only)",
         description=(
             "Replaces the current session with one for another member: their "
-            "member number and their roles. Name and email stay the caller's; "
+            "member number, roles and name. Email stays the caller's; "
             "`picture` is dropped. Consumers receive an ordinary token.\n\n"
             "Requires the configured impersonator role. Lasts a fixed time that "
             "refreshing does not extend; logging out is the only way back.\n\n"

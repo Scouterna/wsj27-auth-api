@@ -215,11 +215,18 @@ await fetch("/auth/impersonate", {
 });
 ```
 
-The session is replaced outright. The caller gets the target's member number
-and roles, keeps their own name and email, and loses `picture`. Consumers
-write the picture back to the member record, so keeping it would put the
-caller's avatar on the target's record. Apps see an ordinary token and need
-no changes. Anything done while impersonating is attributed to the target
+The session is replaced outright. The caller gets the target's member number,
+roles and name, keeps their own email, and loses `picture`. Consumers write the
+picture back to the member record, so keeping it would put the caller's avatar
+on the target's record. Apps see an ordinary token and need no changes.
+
+The name is looked up once, from project-api's
+`/participants/individual/<member_no>`, using the caller's own token, so it
+reads nothing the caller couldn't read themselves. project-api has the name
+only as "first last", so `given_name`/`family_name` come from splitting it at
+the first space. A double first name splits wrongly, but `name` is always
+right. If the lookup fails, the caller keeps their own name and a warning is
+logged. Anything done while impersonating is attributed to the target
 member. Each switch is logged at WARNING with the real user behind it.
 
 - **Who:** the caller must hold `IMPERSONATOR_ROLE` or a role beneath it, so
