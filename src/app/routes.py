@@ -255,7 +255,7 @@ async def refresh(request: Request) -> Response:
                     "example": {
                         "user": {
                             "name": "Test Testsson",
-                            "preferredUsername": "scoutnet|1234567",
+                            "preferredUsername": "1234567@scoutnet",
                             "givenName": "Test",
                             "familyName": "Testsson",
                             "email": "test@example.se",

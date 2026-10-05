@@ -182,11 +182,11 @@ never contacted — not even for discovery at startup — so the apps can be dri
 without a working Keycloak client:
 
 ```bash
-FAKE_USER_ID={"name": "Test Testsson", "preferred_username": "scoutnet|1234567", "email": "test@example.se"}
+FAKE_USER_ID={"name": "Test Testsson", "preferred_username": "1234567@scoutnet", "email": "test@example.se"}
 ```
 
 Everything downstream is the real path: the member number is read from these
-claims (`scoutnet|1234567` → `1234567`), roles are looked up for it as usual,
+claims (`1234567@scoutnet` → `1234567`), roles are looked up for it as usual,
 and the same cookies are set — so pair it with `STUB_ROLES_FILE` or a running
 project-api to test a role. `/logout` ends the session normally.
 

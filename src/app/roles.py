@@ -244,17 +244,17 @@ def member_no_from_claims(claims: dict[str, Any]) -> str | None:
         if value is not None:
             return str(value)
 
-    # ScoutID usernames are "scoutnet|3073781" today and are expected to become
-    # "scoutnet@3073781" before production, so accept either separator rather
-    # than breaking silently on the day that changes.
+    # ScoutID usernames were "scoutnet|3073781" and are now "3073781@scoutnet".
+    # Accept both, so an older ScoutID deployment still resolves. Only digits
+    # count: anything else could never match the role cache, and falling through
+    # to the warning below is more useful than returning it.
     username = claims.get("preferred_username")
     if isinstance(username, str):
-        for separator in ("|", "@"):
-            prefix = f"scoutnet{separator}"
-            if username.startswith(prefix):
-                member_no = username.removeprefix(prefix)
-                if member_no:
-                    return member_no
+        member_no = username.removesuffix("@scoutnet") if username.endswith("@scoutnet") else None
+        if member_no is None and username.startswith("scoutnet|"):
+            member_no = username.removeprefix("scoutnet|")
+        if member_no and member_no.isdigit():
+            return member_no
 
     subject = claims.get("sub")
     if subject is not None:
