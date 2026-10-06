@@ -129,20 +129,23 @@ token against the published JWKS the way a consumer would.
 
 ## Git workflow
 
-Same `dev`/`main` model as wsj27-project-api. No PRs yet (deliberately
-deferred — see "Later" below; don't assume they're in place).
+Same `dev`/`main` model and release routine as wsj27-project-api. No PRs yet
+(deliberately deferred — see "Later" below; don't assume they're in place).
+Work is tracked on the shared WSJ27 GitHub project; how agents use it is in the
+`github-project` memory of the WSJ27 parent store, imported by `../CLAUDE.md`.
 
 ### Branch model
 
 - **`main`** — production line. Only receives code that's been decided ready
   for prod: a deliberate `dev` → `main` promotion, or a `hotfix/...` branch cut
-  directly from `main`. Every push to `main` triggers CI
-  (`.github/workflows/build-and-publish.yml`), which publishes
-  `ghcr.io/scouterna/wsj27-auth-api:latest` and `:<short-sha>`.
+  directly from `main`. **Anything that lands on `main` is released at once:**
+  pushed, and tagged with the next `vX.Y.Z` (see "Release" below). `main` is
+  never left ahead of `origin/main` or ahead of its latest tag.
 - **`dev`** — integration branch. All feature branches merge here first and
   accumulate, so multiple in-progress features can be tested together. Every
-  push to `dev` triggers CI too, publishing `:dev`. The dev k8s environment
-  (`wsj27-infra/k8s/dev/wsj27-auth-api.yaml`) tracks `:dev`.
+  push to `dev` makes CI publish `:dev`. In the dev environment, ArgoCD Image Updater
+  notices the new image and rolls it out within a few minutes. Nothing else is
+  needed, so no `rollout restart`.
 - **`feat/...`** — cut from `dev`, merged back into `dev` with a local
   `git merge` (no PR yet) once ready to test alongside whatever else is there.
 - **`hotfix/...`** — cut from `main`, for changes that must reach prod without
@@ -150,15 +153,35 @@ deferred — see "Later" below; don't assume they're in place).
   `main`, then merged *forward* into `dev` so the fix isn't lost or
   reintroduced by the next promotion.
 
-The only two things that ever affect prod: pushing to `main` (produces a new
-candidate image), and manually bumping the SHA pin in
-`wsj27-infra/k8s/prod/wsj27-auth-api.yaml` + applying it. Pushing to `dev`
-never touches prod.
+Prod runs the version pinned in `../wsj27-infra/k8s/prod/wsj27-auth-api.yaml`.
+ArgoCD applies whatever is on wsj27-infra's `origin/main`. **Pushing wsj27-infra is
+always Håkan's manual step. Agents never push it.** Pushing to `dev`, or even
+to `main`, never touches prod by itself.
 
-This retires the old per-cluster `k8s/` overlays (homelab/wstest/scoutweb,
-each with its own registry and manual `podman build`/`push`) in favor of the
-single scoutweb cluster managed through `wsj27-infra`, matching how
-wsj27-project-api is deployed. `k8s/` is gitignored locally and going away.
+### Release
+
+Merging or committing to `main` happens only when Håkan asks for it. Once he
+has, these steps are part of the same job and need no separate go-ahead:
+
+```bash
+git push origin main
+git describe --tags --abbrev=0            # last release, e.g. v1.0.0
+git tag -a v1.1.0 -m v1.1.0               # next version, on the commit just pushed
+git push origin v1.1.0
+gh run watch                              # CI publishes :v1.1.0
+```
+
+Pick the version from the commits since the last tag. Any `feat` means a minor
+bump, and only fixes or chores mean a patch bump. A major bump needs Håkan to
+say so.
+
+Then pin it for prod in `../wsj27-infra`. Change only the image tag in
+`k8s/prod/wsj27-auth-api.yaml`, and commit it on wsj27-infra's `main` with a
+one-line message (`chore(k8s): bump wsj27-auth-api to v1.1.0`). **Do not push
+wsj27-infra.** Tell Håkan the commit is ready. His push is what rolls prod.
+
+Finally, close the issues this release completes and set them to **In Prod** on
+the project.
 
 ### Recipes
 
@@ -175,21 +198,15 @@ git checkout dev && git pull
 git merge feat/whatever
 git push origin dev
 ```
-CI publishes `:dev`. Like `:latest`, this is a moving tag — after a push,
-`kubectl -n proj-wsj27-dev rollout restart deployment/wsj27-auth-api` is
-needed to actually repull it; `apply` alone won't.
+CI publishes `:dev`, and the dev environment picks it up by itself.
 
 **Promote to prod** (once you've decided what's in `dev` is ready):
 ```bash
 git log main..dev --oneline      # check exactly what you're about to ship
 git checkout main && git pull
 git merge dev
-git push origin main
 ```
-Watch CI (`gh run list` / `gh run watch`), get the new short SHA
-(`git rev-parse --short HEAD`), bump the image tag in
-`wsj27-infra/k8s/prod/wsj27-auth-api.yaml` to that SHA, apply, and
-`rollout restart` in the `proj-wsj27-prod` namespace.
+Then run "Release" above.
 
 **Hotfix straight to prod, bypassing untested `dev` work:**
 ```bash
@@ -198,9 +215,8 @@ git checkout -b hotfix/auth-thing
 # ...commit...
 git checkout main
 git merge hotfix/auth-thing
-git push origin main
 ```
-Bump prod's SHA pin as above, then sync the fix back into `dev`:
+Run "Release", then sync the fix back into `dev`:
 ```bash
 git checkout dev
 git merge main
@@ -211,6 +227,3 @@ git push origin dev
 
 - Switch `feat/... → dev` and `dev → main` merges to GitHub PRs once things
   stabilize — no CI change needed, `pull_request` builds already run.
-- Start tagging releases (`v1.2.3`) on `main` instead of pinning prod to a raw
-  SHA — the CI trigger for `v*.*.*` tags already exists and needs nothing
-  further.
