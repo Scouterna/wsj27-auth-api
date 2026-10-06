@@ -113,11 +113,14 @@ def set_session_cookies(
 
     if refresh_token:
         set_cookie(response, constants.REFRESH_TOKEN, refresh_token, max_age=refresh_expires_in)
+        # Readable by JavaScript, like expires-at: it lets a page tell whether there
+        # is a session to refresh without asking us on every visit.
         set_cookie(
             response,
             constants.REFRESH_EXPIRES_AT,
             str(now_ms + refresh_expires_in * 1000),
             max_age=refresh_expires_in,
+            http_only=False,
         )
 
     if id_token:

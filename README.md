@@ -58,7 +58,7 @@ Prefix `wsj27-auth_`, all `Path=/`, `SameSite=Lax`, `Secure` unless
 | `access-token` | **our** re-signed JWT | yes |
 | `refresh-token` | Keycloak's refresh token | yes |
 | `id-token` | Keycloak's ID token (logout hint) | yes |
-| `refresh-expires-at` | ms epoch | yes |
+| `refresh-expires-at` | ms epoch | **no** — lets a page see that a session can be refreshed |
 | `expires-at` | ms epoch | **no** — `refresh.js` reads it |
 | `oidc-code-verifier`, `oidc-state`, `oidc-nonce`, `redirect-uri` | login round-trip only, 30 min | yes |
 
