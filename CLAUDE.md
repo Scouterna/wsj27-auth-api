@@ -78,6 +78,29 @@ IdP — same reason as the roles. `SERVICE_CLIENT_ROLES` is ordinary config;
 host and read each other's cookies; without an explicit path the browser scopes
 them to `/auth` and cross-app reads work only by accident.
 
+**Impersonation replaces the session; it does not annotate it.** `POST
+/impersonate` (dev only, `ALLOW_IMPERSONATION`) mints an ordinary token with
+the target's `member_no`, roles and name. No `act` claim is added, so consumers
+cannot tell and need nothing. Four details are deliberate:
+- The name comes from project-api's participant endpoint, called with the
+  *caller's* token, not our service account's. The endpoint is
+  access-controlled, and borrowing the caller's access means the service
+  account needs no grant to every participant's data. The name is fetched once
+  and carried in the impersonation token. A failed lookup keeps the caller's
+  name rather than failing the switch.
+- `picture` is always dropped, because project-api writes it back to the member
+  record keyed by `member_no`.
+- `preferred_username` follows the member number only where it holds that
+  number once, as a whole number, so the IdP's format is never hardcoded.
+  ScoutID has already moved the number from the end of the username to the
+  start; a position-based match broke silently when it did.
+- The refresh cookie becomes a token *we* sign. Its `aud` is
+  `<AUDIENCE>-impersonation`, so it can never pass as an access token. Its
+  expiry is fixed and carried unchanged across refreshes.
+
+`/refresh` must test for that token before the `FAKE_USER_ID` branch, or the
+fake user silently replaces the impersonation. Logout is the only way back.
+
 ## Shared-host deployment
 
 One frontend app-shell owns the base host; the other apps mount under path

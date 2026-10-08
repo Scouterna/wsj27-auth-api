@@ -73,6 +73,7 @@ def mint_access_token(
     source_claims: dict[str, Any],
     roles: list[str],
     member_no: str | None = None,
+    expires_in: int | None = None,
 ) -> tuple[str, int]:
     """Build and sign a user's access token, from the IdP's claims plus roles.
 
@@ -80,6 +81,9 @@ def mint_access_token(
     look up the roles). It is emitted under that one name whatever the IdP calls
     it — ScoutID uses `scoutnet_member_no` — so consumers read a stable claim
     and are insulated from the realm's naming.
+
+    `expires_in` shortens the lifetime below ACCESS_TOKEN_TTL_SECONDS, for a
+    session that itself ends sooner than that.
     """
     claims: dict[str, Any] = {}
 
@@ -93,7 +97,11 @@ def mint_access_token(
 
     claims.update(_role_claims(roles))
 
-    return _sign(claims, settings.ACCESS_TOKEN_TTL_SECONDS)
+    ttl = settings.ACCESS_TOKEN_TTL_SECONDS
+    if expires_in is not None:
+        ttl = min(ttl, expires_in)
+
+    return _sign(claims, ttl)
 
 
 def mint_service_token(client_id: str, roles: list[str]) -> tuple[str, int]:
@@ -123,6 +131,73 @@ def mint_service_token(client_id: str, roles: list[str]) -> tuple[str, int]:
     claims.update(_role_claims(roles))
 
     return _sign(claims, settings.SERVICE_TOKEN_TTL_SECONDS)
+
+
+def impersonation_audience() -> str:
+    """The `aud` of an impersonation refresh token.
+
+    Deliberately not AUDIENCE: consumers require `aud == AUDIENCE`, so this
+    token, though signed with the same key, can never pass as an access token.
+    """
+    return f"{settings.AUDIENCE}-impersonation"
+
+
+def mint_impersonation_token(identity: dict[str, Any], member_no: str, expires_at: int) -> str:
+    """Build the refresh token of an impersonated session.
+
+    While impersonating there is no Keycloak session behind the browser, so this
+    stands in for Keycloak's refresh token. It carries everything /refresh needs
+    to re-mint — the identity claims and the member whose roles to take — and
+    our signature is what stops a user editing the member number in it.
+
+    `expires_at` is absolute and carried over unchanged on every refresh, so an
+    active tab cannot keep an impersonation alive past its fixed lifetime.
+    """
+    claims = {
+        # Overrides the defaults _sign sets. "Refresh" is the typ Keycloak gives
+        # its own refresh tokens, so the token says what it is to anyone decoding it.
+        "aud": impersonation_audience(),
+        "typ": "Refresh",
+        "identity": identity,
+        "member_no": member_no,
+    }
+    token, _ = _sign(claims, expires_at - int(time.time()))
+    return token
+
+
+def verify_impersonation_token(token: str) -> dict[str, Any] | None:
+    """Verify an impersonation refresh token.
+
+    Returns None when the token is not one of ours at all — a Keycloak refresh
+    token, or the FAKE_USER_ID placeholder — so the caller can fall through to
+    the ordinary refresh. Raises TokenError when it *is* ours but no longer
+    valid, typically expired: that session is over and must not be handed to
+    Keycloak instead.
+    """
+    try:
+        decoded = jwt.decode(token, get_verification_key_set(), algorithms=[ALGORITHM])
+    except JoseError, ValueError:
+        return None
+
+    try:
+        # No leeway: we are the only issuer and the only verifier, and the
+        # lifetime is meant to be exact. It also guarantees time is left to
+        # mint an access token for.
+        registry = jwt.JWTClaimsRegistry(
+            leeway=0,
+            iss={"essential": True, "value": settings.issuer},
+            aud={"essential": True, "value": impersonation_audience()},
+            exp={"essential": True},
+        )
+        registry.validate(decoded.claims)
+    except (JoseError, ValueError) as exc:
+        raise TokenError(str(exc)) from exc
+
+    claims = dict(decoded.claims)
+    if not isinstance(claims.get("identity"), dict) or not isinstance(claims.get("member_no"), str):
+        raise TokenError("Impersonation token is missing its identity or member number")
+
+    return claims
 
 
 def _role_claims(roles: list[str]) -> dict[str, Any]:
@@ -169,6 +244,18 @@ def verify_access_token(token: str) -> dict[str, Any]:
         raise TokenError(str(exc)) from exc
 
     return dict(decoded.claims)
+
+
+def has_role(held_roles: list[str], required: str) -> bool:
+    """True if any held role is `required` or a more specific role beneath it.
+
+    "wsj27:cmt" is satisfied by "wsj27:cmt:admin:medlem", matching how the
+    project API reads its own roles. Compared colon-segment-wise rather than
+    with str.startswith(), which would let "wsj27:cmtx" pass as "wsj27:cmt".
+    """
+    required_segments = required.split(":")
+    depth = len(required_segments)
+    return any(role.split(":")[:depth] == required_segments for role in held_roles)
 
 
 def extract_roles(claims: dict[str, Any]) -> list[str]:

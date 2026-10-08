@@ -65,6 +65,14 @@ if settings.FAKE_USER_ID:
         banner,
     )
 
+if settings.ALLOW_IMPERSONATION:
+    logging.warning(
+        "ALLOW_IMPERSONATION is set: users holding %r can become any other member via POST /impersonate "
+        "for up to %ds. This must never be set in production.",
+        settings.IMPERSONATOR_ROLE,
+        settings.IMPERSONATION_TTL_SECONDS,
+    )
+
 try:
     uvicorn.run(
         "app.main:app",
