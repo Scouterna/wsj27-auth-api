@@ -748,7 +748,7 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
         return JSONResponse({"error": "Unknown member"}, status_code=404)
 
     # Fetched once, here; it then travels in the impersonation token, so
-    # /refresh never calls the project API. None keeps the caller's own name.
+    # /refresh never calls the project API. None leaves the name out.
     target_name = await participants.fetch_name(target, access_token)
 
     identity = _impersonated_identity(claims, target, target_name)
@@ -765,7 +765,7 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
         claims.get("sub"),
         claims.get("member_no"),
         target,
-        target_name or "name not found, keeping the caller's",
+        target_name or "name not found, leaving it out",
         settings.IMPERSONATION_TTL_SECONDS,
     )
 
@@ -774,31 +774,33 @@ async def impersonate(request: Request, body: ImpersonateRequest) -> Response:
 
 
 def _impersonated_identity(claims: dict[str, Any], target: str, target_name: str | None) -> dict[str, Any]:
-    """The caller's identity claims, adjusted to belong to `target`.
+    """Identity claims that belong to `target` alone.
 
-    The member number is what consumers look a user's own data up by, and that
-    is set to the target's when minting. The name follows when `target_name` is
-    known, so a demonstration shows who is being shown; otherwise it stays the
-    caller's. `sub` and email always stay the caller's.
+    Nothing of the caller's identity is carried over: a claim we cannot fill
+    for the target is left out rather than kept. Otherwise a consumer would mix
+    two people in one token, e.g. the target's member number with the caller's
+    email, and act on the caller's data while showing the target's.
 
-    The project API has the name only as one "first last" string, so it is
+    `sub` is synthetic, "impersonated:<member_no>". The target's real IdP
+    subject is unknown, and consumers that key users by `sub` need one that is
+    stable per target and can never collide with a real account.
+
+    `preferred_username` is the caller's with the member number swapped for the
+    target's, when it holds the number exactly once as a whole number: consumers
+    parse the number out of the username, so it must agree with `member_no`.
+    Matching the number itself rather than its position keeps the IdP's username
+    format out of this code: ScoutID has already moved it from the end
+    ("scoutnet|1234567") to the start ("1234567@scoutnet"). Without a match it
+    is left out, since what remains is the caller's.
+
+    The name comes from the project API as one "first last" string, so it is
     split at the first space: right for most names, wrong for a double first
     name. Only consumers reading given_name/family_name see the difference.
-
-    `picture` is dropped because consumers write it back to the member record
-    keyed by member number — keeping it would put the caller's avatar on the
-    target's record.
-
-    `preferred_username` follows the member number when it contains it exactly
-    once as a whole number, so a consumer parsing the number out of the username
-    agrees with `member_no`. Matching the number itself rather than its position
-    keeps the IdP's username format out of this code: ScoutID has already moved
-    it from the end ("scoutnet|1234567") to the start ("1234567@scoutnet").
     """
-    identity = {name: claims[name] for name in tokens.IDENTITY_CLAIMS if name in claims and name != "picture"}
+    identity: dict[str, Any] = {"sub": f"impersonated:{target}"}
 
     current = claims.get("member_no")
-    username = identity.get("preferred_username")
+    username = claims.get("preferred_username")
     if isinstance(current, str) and current and isinstance(username, str):
         # Whole numbers only: "4567" must not match inside "1234567".
         pattern = rf"(?<!\d){re.escape(current)}(?!\d)"
@@ -854,8 +856,9 @@ if settings.ALLOW_IMPERSONATION:
         summary="Become another member (dev only)",
         description=(
             "Replaces the current session with one for another member: their "
-            "member number, roles and name. Email stays the caller's; "
-            "`picture` is dropped. Consumers receive an ordinary token.\n\n"
+            "member number, roles and name. Nothing of the caller's identity is "
+            "kept: what is unknown for the target, such as email, is left out. "
+            "Consumers receive an ordinary token.\n\n"
             "Requires the configured impersonator role. Lasts a fixed time that "
             "refreshing does not extend; logging out is the only way back.\n\n"
             "Call with `fetch` and a JSON body. Only enabled in test environments."

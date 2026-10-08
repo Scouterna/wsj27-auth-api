@@ -81,19 +81,26 @@ them to `/auth` and cross-app reads work only by accident.
 **Impersonation replaces the session; it does not annotate it.** `POST
 /impersonate` (dev only, `ALLOW_IMPERSONATION`) mints an ordinary token with
 the target's `member_no`, roles and name. No `act` claim is added, so consumers
-cannot tell and need nothing. Four details are deliberate:
+cannot tell and need nothing. Five details are deliberate:
+- **Nothing of the caller's identity is carried over.** A claim we cannot fill
+  for the target (email, picture, locale) is left out, not kept. A token mixing
+  two people lets a consumer show the target while acting on the caller's data.
+  `picture` would be worse still: project-api writes it back to the member
+  record keyed by `member_no`.
+- `sub` is synthetic, `impersonated:<member_no>`. The target's IdP subject is
+  unknown, and consumers that key users by `sub` (the CMS) need one that is
+  stable per target and cannot collide with a real account.
 - The name comes from project-api's participant endpoint, called with the
   *caller's* token, not our service account's. The endpoint is
   access-controlled, and borrowing the caller's access means the service
   account needs no grant to every participant's data. The name is fetched once
-  and carried in the impersonation token. A failed lookup keeps the caller's
-  name rather than failing the switch.
-- `picture` is always dropped, because project-api writes it back to the member
-  record keyed by `member_no`.
+  and carried in the impersonation token. A failed lookup leaves the name out
+  rather than failing the switch.
 - `preferred_username` follows the member number only where it holds that
   number once, as a whole number, so the IdP's format is never hardcoded.
   ScoutID has already moved the number from the end of the username to the
-  start; a position-based match broke silently when it did.
+  start; a position-based match broke silently when it did. Without a match
+  it is left out, which project-api then rejects: better than the caller's.
 - The refresh cookie becomes a token *we* sign. Its `aud` is
   `<AUDIENCE>-impersonation`, so it can never pass as an access token. Its
   expiry is fixed and carried unchanged across refreshes.
