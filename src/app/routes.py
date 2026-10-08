@@ -12,6 +12,7 @@ same kind of token to machine callers via the client-credentials grant.
 import base64
 import binascii
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -763,19 +764,21 @@ def _impersonated_identity(claims: dict[str, Any], target: str, target_name: str
     keyed by member number — keeping it would put the caller's avatar on the
     target's record.
 
-    `preferred_username` follows the member number when it ends with it, so a
-    consumer parsing the number out of the username agrees with `member_no`. A
-    plain suffix match, so the IdP's username format is never hardcoded here.
+    `preferred_username` follows the member number when it contains it exactly
+    once as a whole number, so a consumer parsing the number out of the username
+    agrees with `member_no`. Matching the number itself rather than its position
+    keeps the IdP's username format out of this code: ScoutID has already moved
+    it from the end ("scoutnet|1234567") to the start ("1234567@scoutnet").
     """
     identity = {name: claims[name] for name in tokens.IDENTITY_CLAIMS if name in claims and name != "picture"}
 
     current = claims.get("member_no")
     username = identity.get("preferred_username")
-    if isinstance(current, str) and current and isinstance(username, str) and username.endswith(current):
-        prefix = username.removesuffix(current)
-        # "scoutnet|1234567" ends with "4567" too; only a whole number counts.
-        if not prefix or not prefix[-1].isdigit():
-            identity["preferred_username"] = prefix + target
+    if isinstance(current, str) and current and isinstance(username, str):
+        # Whole numbers only: "4567" must not match inside "1234567".
+        pattern = rf"(?<!\d){re.escape(current)}(?!\d)"
+        if len(re.findall(pattern, username)) == 1:
+            identity["preferred_username"] = re.sub(pattern, lambda _: target, username)
 
     if target_name:
         given_name, _, family_name = target_name.partition(" ")

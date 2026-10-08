@@ -90,8 +90,10 @@ cannot tell and need nothing. Four details are deliberate:
   name rather than failing the switch.
 - `picture` is always dropped, because project-api writes it back to the member
   record keyed by `member_no`.
-- `preferred_username` follows the member number only by suffix match, so the
-  IdP's format is never hardcoded.
+- `preferred_username` follows the member number only where it holds that
+  number once, as a whole number, so the IdP's format is never hardcoded.
+  ScoutID has already moved the number from the end of the username to the
+  start; a position-based match broke silently when it did.
 - The refresh cookie becomes a token *we* sign. Its `aud` is
   `<AUDIENCE>-impersonation`, so it can never pass as an access token. Its
   expiry is fixed and carried unchanged across refreshes.
