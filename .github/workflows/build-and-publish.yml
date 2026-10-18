@@ -37,6 +37,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Copy the official Python image into this repo's own GHCR package, which
+      # the Dockerfile builds FROM. Docker Hub and AWS's public mirror both
+      # rate-limit the anonymous pulls CI makes (429), so a failed copy is not
+      # fatal: the build goes on with the copy from the last run that worked.
+      # Every build refreshes it, so Python and Debian patches still come in.
+      - name: Mirror the Python base image
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          docker buildx imagetools create \
+            -t "ghcr.io/${GITHUB_REPOSITORY,,}/python:3.14-slim" \
+            public.ecr.aws/docker/library/python:3.14-slim
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
