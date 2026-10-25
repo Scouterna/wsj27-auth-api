@@ -83,10 +83,10 @@ them to `/auth` and cross-app reads work only by accident.
 the target's `member_no`, roles and name. No `act` claim is added, so consumers
 cannot tell and need nothing. Five details are deliberate:
 - **Nothing of the caller's identity is carried over.** A claim we cannot fill
-  for the target (email, picture, locale) is left out, not kept. A token mixing
-  two people lets a consumer show the target while acting on the caller's data.
-  `picture` would be worse still: project-api writes it back to the member
-  record keyed by `member_no`.
+  for the target (email, `scouterna_email`, picture, locale) is left out, not
+  kept. A token mixing two people lets a consumer show the target while acting
+  on the caller's data. `picture` and `scouterna_email` would be worse still:
+  project-api writes them back to the member record keyed by `member_no`.
 - `sub` is synthetic, `impersonated:<member_no>`. The target's IdP subject is
   unknown, and consumers that key users by `sub` (the CMS) need one that is
   stable per target and cannot collide with a real account.

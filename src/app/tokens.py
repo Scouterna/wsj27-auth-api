@@ -39,6 +39,7 @@ IDENTITY_CLAIMS = (
     "family_name",
     "email",
     "email_verified",
+    "scouterna_email",
     "locale",
     "picture",
 )

@@ -574,6 +574,7 @@ async def openid_configuration() -> Response:
                 "given_name",
                 "family_name",
                 "email",
+                "scouterna_email",
                 "picture",
                 "member_no",
                 "realm_access",
